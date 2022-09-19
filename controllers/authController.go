@@ -1,8 +1,6 @@
 package controllers
 
 import (
-	// "fmt"
-
 	"login/database"
 	"login/models"
 	"strconv"
