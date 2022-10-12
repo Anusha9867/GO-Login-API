@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	// "fmt"
+
 	"login/database"
 	"login/models"
 	"strconv"
@@ -22,6 +24,25 @@ func Register(c *fiber.Ctx) error {
 
 	user_password, _ := bcrypt.GenerateFromPassword([]byte(data["password"]), 14)
 
+	var exists bool = false
+
+	if err := database.DB.Raw(
+		"SELECT EXISTS(SELECT 1 FROM users WHERE email = ?)",
+		data["email"]).
+		Scan(&exists).Error; err != nil {
+
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "internal server error",
+		})
+	}
+
+	if exists {
+
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"message": "Email already exists",
+		})
+	}
+
 	user := models.User{
 		Name:  data["name"],
 		Email: data["email"],
@@ -36,9 +57,7 @@ func Register(c *fiber.Ctx) error {
 
 	database.DB.Preload("passwords").Create(&password)
 
-	return c.JSON(fiber.Map{
-		"message": "Registered successfully",
-	})
+	return c.JSON(user)
 }
 
 func Login(c *fiber.Ctx) error {
@@ -55,9 +74,9 @@ func Login(c *fiber.Ctx) error {
 	database.DB.Where("email = ?", data["email"]).First(&user)
 
 	if user.Id == 0 {
-		c.Status(fiber.StatusNotFound)
+		//c.Status(fiber.StatusNotFound)
 		return c.JSON(fiber.Map{
-			"message": "user not found",
+			"message": "User not found",
 		})
 	}
 
@@ -66,7 +85,7 @@ func Login(c *fiber.Ctx) error {
 	if err := bcrypt.CompareHashAndPassword(pwd.Password, []byte(data["password"])); err != nil {
 		c.Status(fiber.StatusBadRequest)
 		return c.JSON(fiber.Map{
-			"message": "incorrect password",
+			"message": "Incorrect password",
 		})
 	}
 
@@ -80,7 +99,7 @@ func Login(c *fiber.Ctx) error {
 	if err != nil {
 		c.Status(fiber.StatusInternalServerError)
 		return c.JSON(fiber.Map{
-			"message": "could not login",
+			"message": "Could not login",
 		})
 	}
 
@@ -130,4 +149,80 @@ func Delete(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"message": "Deleted successfully",
 	})
+}
+
+func User(c *fiber.Ctx) error {
+
+	cookie := c.Cookies("jwt")
+
+	token, err := jwt.ParseWithClaims(cookie, &jwt.StandardClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(SecretKey), nil
+	})
+
+	if err != nil {
+		c.Status(fiber.StatusUnauthorized)
+		return c.JSON(fiber.Map{
+			"message": "Please Login to continue",
+		})
+	}
+
+	claims := token.Claims.(*jwt.StandardClaims)
+
+	var user models.User
+
+	var pwd models.Password
+
+	database.DB.Select("id", "name", "email").Where("id = ?", claims.Issuer).First(&user)
+
+	database.DB.Select("password").Where("id = ?", claims.Issuer).First(&pwd)
+
+	return c.JSON(fiber.Map{
+		"id":    claims.Issuer,
+		"name":  user.Name,
+		"email": user.Email,
+	})
+}
+
+func Update(c *fiber.Ctx) error {
+
+	id := c.Params("id")
+
+	var user models.User
+
+	//var pwd models.Password
+
+	var data map[string]string
+
+	//database.DB.First(&data, id)
+
+	if err := c.BodyParser(&user); err != nil {
+		return err
+	}
+	if err := c.BodyParser(&data); err != nil {
+		return err
+	}
+	database.DB.Model(&user).Debug().Select("*").Where("id = ?", id).Updates(&user)
+
+	user_password, _ := bcrypt.GenerateFromPassword([]byte(data["password"]), 14)
+
+	database.DB.Debug().Select("password").Where("user_id = ?", id).Updates(models.Password{Password: user_password})
+
+	return c.JSON(fiber.Map{
+		"id":       id,
+		"name":     data["name"],
+		"email":    data["email"],
+		"password": data["password"],
+	})
+
+}
+
+func GetUser(c *fiber.Ctx) error {
+
+	id := c.Params("id")
+
+	var user models.User
+
+	database.DB.Select("id", "name", "email").First(&user, id)
+
+	return c.JSON(user)
 }
